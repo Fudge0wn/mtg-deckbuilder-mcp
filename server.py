@@ -7,6 +7,8 @@
 import re
 import threading
 import time
+from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -513,6 +515,178 @@ def export_deck(decklist: str, commander: str | None = None) -> dict:
         lines += ["Commander", f"1 {card(commander)['name']}", "", "Deck"]
     lines += [f"{q} {c['name']}" for c, q in rows]
     return {"text": "\n".join(lines), "not_found": not_found}
+
+
+_DECK_DIR = Path.home() / "Documents" / "MTG Decks"
+
+
+@mcp.tool()
+def save_deck(decklist: str, deck_name: str, commander: str | None = None) -> dict:
+    """Save a decklist as a text file, only when the user asks for a file.
+
+    Formats it like export_deck (ready to import into Arena, Moxfield or Archidekt) and
+    writes it to 'Documents/MTG Decks/<deck_name>.txt'. Existing files are never
+    overwritten; a number is added to the name instead. Returns the file path.
+    """
+    exported = export_deck(decklist, commander)
+    if "error" in exported:
+        return exported
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", deck_name).strip(" .") or "deck"
+    _DECK_DIR.mkdir(parents=True, exist_ok=True)
+    path = _DECK_DIR / f"{safe}.txt"
+    n = 2
+    while path.exists():
+        path = _DECK_DIR / f"{safe} ({n}).txt"
+        n += 1
+    path.write_text(exported["text"] + "\n", encoding="utf-8")
+    return {"saved_to": str(path), "not_found": exported["not_found"]}
+
+
+@mcp.tool()
+def get_rulings(card_name: str) -> dict:
+    """Official rulings (clarifications from Wizards and Scryfall) for one card, newest first."""
+    r = _request("GET", "/cards/named", params={"fuzzy": card_name})
+    if r.status_code != 200:
+        return {"error": _error(r)}
+    c = r.json()
+    rr = _request("GET", f"/cards/{c['id']}/rulings")
+    if rr.status_code != 200:
+        return {"error": _error(rr)}
+    rulings = [
+        {"date": x.get("published_at"), "source": x.get("source"), "text": x.get("comment")}
+        for x in rr.json().get("data", [])
+    ]
+    return {"card": c["name"], "rulings": sorted(rulings, key=lambda x: x["date"] or "", reverse=True)}
+
+
+# The Comprehensive Rules are downloaded from Wizards and cached on disk, not shipped with
+# this project. The rules page always links the current version.
+_RULES_PAGE = "https://magic.wizards.com/en/rules"
+_RULES_FILE = Path.home() / ".cache" / "mtg-deckbuilder-mcp" / "MagicCompRules.txt"
+_RULES_TTL = 7 * 24 * 3600
+_RULE_LINE = re.compile(r"^(\d{3}(?:\.\d+[a-z]?)?)\.?\s+(.*)$")
+_rules: tuple[float, dict] | None = None
+
+
+def _download_rules() -> None:
+    headers = {"User-Agent": "scryfall-mcp/0.1"}
+    page = httpx.get(_RULES_PAGE, headers=headers, timeout=30, follow_redirects=True)
+    page.raise_for_status()
+    m = re.search(r'https://media\.wizards\.com/[^"\']+?\.txt', page.text)
+    if not m:
+        raise RuntimeError("No Comprehensive Rules .txt link found on the Wizards rules page.")
+    url = quote(m.group(0), safe=":/%")
+    txt = httpx.get(url, headers=headers, timeout=60, follow_redirects=True)
+    txt.raise_for_status()
+    _RULES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _RULES_FILE.write_bytes(txt.content)
+    (_RULES_FILE.parent / "source.txt").write_text(url, encoding="utf-8")
+
+
+def _load_rules() -> dict:
+    """Parse the cached rules into {'rules': {number: text}, 'glossary': {term: text}, 'source': url}."""
+    global _rules
+    fresh = _RULES_FILE.exists() and time.time() - _RULES_FILE.stat().st_mtime < _RULES_TTL
+    if not fresh:
+        try:
+            _download_rules()
+        except (httpx.HTTPError, RuntimeError):
+            if not _RULES_FILE.exists():
+                raise
+            # Wizards is unreachable; keep using the older copy.
+    mtime = _RULES_FILE.stat().st_mtime
+    if _rules and _rules[0] == mtime:
+        return _rules[1]
+
+    lines = [l.strip() for l in _RULES_FILE.read_text(encoding="utf-8-sig").splitlines()]
+    # 'Glossary' and 'Credits' appear once in the table of contents and once as real sections.
+    glossary_at = max(i for i, l in enumerate(lines) if l == "Glossary")
+    credits_at = max(i for i, l in enumerate(lines) if l == "Credits")
+
+    rules: dict[str, str] = {}
+    last = None
+    for line in lines[:glossary_at]:
+        m = _RULE_LINE.match(line)
+        if m:
+            # Later entries win, so rule text replaces the table-of-contents entry.
+            last = m.group(1)
+            rules[last] = m.group(2)
+        elif line.startswith("Example:") and last:
+            rules[last] += "\n" + line
+
+    glossary: dict[str, str] = {}
+    block: list[str] = []
+    for line in lines[glossary_at + 1 : credits_at] + [""]:
+        if line:
+            block.append(line)
+        elif block:
+            glossary[block[0]] = " ".join(block[1:])
+            block = []
+
+    source = _RULES_FILE.parent / "source.txt"
+    parsed = {
+        "rules": rules,
+        "glossary": glossary,
+        "source": source.read_text(encoding="utf-8") if source.exists() else _RULES_PAGE,
+    }
+    _rules = (mtime, parsed)
+    return parsed
+
+
+@mcp.tool()
+def search_rules(query: str, limit: int = 15) -> dict:
+    """Look things up in the official Magic: The Gathering Comprehensive Rules.
+
+    query: a rule number ('903.4', '702.40', '903' for a whole section) to get that rule
+    and its sub-rules, or words to search for ('goad', 'commander damage', 'state-based
+    actions'). Word searches return matching glossary entries plus the best-matching rules.
+    Cite rule numbers in answers so the user can check them.
+    """
+    try:
+        data = _load_rules()
+    except (httpx.HTTPError, RuntimeError, OSError) as e:
+        return {"error": f"Could not get the Comprehensive Rules: {e}"}
+    rules, glossary = data["rules"], data["glossary"]
+    q = query.strip().rstrip(".")
+
+    if re.fullmatch(r"\d{3}(\.\d+)?[a-z]?", q):
+        def under(num: str) -> bool:
+            if num == q:
+                return True
+            rest = num[len(q) :] if num.startswith(q) else None
+            # '903' -> '903.1'; '903.4' -> '903.4a' (but not '903.40').
+            return bool(rest) and (rest[0] == "." if "." not in q else rest[0].isalpha())
+
+        hits = [{"rule": n, "text": t} for n, t in rules.items() if under(n)]
+        shown = max(limit, 40)
+        result = {"results": hits[:shown], "total_matches": len(hits), "source": data["source"]}
+        if len(hits) > shown:
+            result["note"] = f"Showing {shown} of {len(hits)}; ask for a narrower number like '{q}.1'."
+        return result
+
+    words = q.lower().split()
+    terms = [
+        {"term": term, "text": text}
+        for term, text in glossary.items()
+        if all(w in term.lower() for w in words)
+    ][:5]
+    scored = []
+    for num, text in rules.items():
+        low = text.lower()
+        if all(w in low for w in words):
+            # Rule headings like '701.15. Goad' rank first, then the exact phrase,
+            # then how often the words appear.
+            heading = low.split("\n")[0] == q.lower()
+            scored.append(
+                (not heading, -low.count(q.lower()), -sum(low.count(w) for w in words), num, text)
+            )
+    scored.sort()
+    return {
+        "glossary": terms,
+        "results": [{"rule": n, "text": t} for *_, n, t in scored[:limit]],
+        "total_matches": len(scored),
+        "source": data["source"],
+    }
 
 
 @mcp.prompt(title="Build a budget Commander deck")

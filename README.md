@@ -2,8 +2,9 @@
 
 An MCP server that lets Claude build Magic: The Gathering decks with you using
 card data from [Scryfall](https://scryfall.com): search cards, analyze the
-mana curve and colors, check legality and a budget in euros, find cheaper
-replacements and export the list for MTG Arena, Moxfield or Archidekt.
+mana curve, colors and card roles, check legality and a budget in euros, find
+cheaper replacements, look up card rulings and the official rules, and export
+or save the list for MTG Arena, Moxfield or Archidekt.
 
 ## What Claude can do with it
 
@@ -18,6 +19,9 @@ replacements and export the list for MTG Arena, Moxfield or Archidekt.
 | `analyze_deck` | Mana curve, card type counts, roles (ramp, card draw, removal, board wipes, counterspells, tutors, recursion, protection), colored mana symbols vs. land sources, and warnings like too few lands, too little ramp or removal, or too few sources for a color. |
 | `find_alternatives` | Cheaper cards of the same type and similar mana value within your colors, under a price cap. |
 | `export_deck` | Fixes card names and formats the list for import into MTG Arena, Moxfield or Archidekt. |
+| `save_deck` | Saves the decklist as a text file in `Documents/MTG Decks` (only when you ask). |
+| `get_rulings` | Official rulings (clarifications) for a card. |
+| `search_rules` | Look up the official Comprehensive Rules by rule number (`903.4`) or by words (`goad`, `state-based actions`). |
 
 It also has a ready-made prompt, **Build a budget Commander deck**: pick it
 from the prompt menu in Claude Desktop (the **+** button in the chat box),
@@ -102,6 +106,10 @@ Decklists can be pasted in the usual export format (`1 Sol Ring`,
 - The server follows Scryfall's
   [API guidelines](https://scryfall.com/docs/api): it identifies itself, waits
   100 ms between requests and caches responses for 24 hours.
+- The Comprehensive Rules are downloaded from
+  [Wizards of the Coast](https://magic.wizards.com/en/rules) the first time
+  they are needed, saved in `~/.cache/mtg-deckbuilder-mcp/` and refreshed
+  weekly. They are not included in this repository.
 - Card data comes from Scryfall, and prices are Cardmarket prices provided by
   Scryfall. This project is not affiliated with Scryfall, Cardmarket or Wizards
   of the Coast.
