@@ -102,5 +102,6 @@ Decklists can be pasted in the usual export format (`1 Sol Ring`,
 - The server follows Scryfall's
   [API guidelines](https://scryfall.com/docs/api): it identifies itself, waits
   100 ms between requests and caches responses for 24 hours.
-- Card data and prices come from Scryfall. This project is not affiliated with
-  Scryfall or Wizards of the Coast.
+- Card data comes from Scryfall, and prices are Cardmarket prices provided by
+  Scryfall. This project is not affiliated with Scryfall, Cardmarket or Wizards
+  of the Coast.
