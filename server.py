@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.10,<3.15"
 # dependencies = ["mcp>=2.3,<3", "httpx"]
 # ///
 """MCP server for building Magic: The Gathering decks with Scryfall data."""

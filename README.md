@@ -97,6 +97,11 @@ Decklists can be pasted in the usual export format (`1 Sol Ring`,
 - **`uv` not found:** Claude Desktop may not see your PATH. Use the full path
   to uv as `"command"` (find it with `where uv` on Windows or `which uv` on
   macOS).
+- **Error about Python while starting** (e.g. "Missing expected target
+  directory for Python minor version link"): uv's first-time Python download
+  went wrong. Open PowerShell (or Terminal on macOS), run
+  `uv python install 3.14`, and restart Claude Desktop. If the error names a
+  folder under `uv\python`, delete that folder first.
 - **Hitting message limits:** deckbuilding uses many tool calls, and the free
   plan has low limits. Ask for fewer, more targeted searches.
 
